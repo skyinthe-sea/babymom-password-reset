@@ -221,16 +221,23 @@
         const SUPABASE_URL = 'https://gowkatetjgcawxemuabm.supabase.co';
         const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdvd2thdGV0amdjYXd4ZW11YWJtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDcyMjIyNjQsImV4cCI6MjA2Mjc5ODI2NH0.GlcHoQofmXWSkowFN2FaXtSqnHWRxG3gsb6IyuE_pTo';
         
-        // URL에서 토큰과 타입 추출 (Cloudflare Pages 최적화)
+        // URL에서 토큰과 타입 추출 (Supabase 비밀번호 재설정 형식)
         const urlParams = new URLSearchParams(window.location.search);
         const fragment = new URLSearchParams(window.location.hash.substring(1));
         
-        // URL 파라미터에서 토큰 확인 (query string과 fragment 모두 확인)
+        // Supabase 비밀번호 재설정은 token_hash 사용
+        const tokenHash = urlParams.get('token_hash') || fragment.get('token_hash');
+        const type = urlParams.get('type') || fragment.get('type');
         const accessToken = urlParams.get('access_token') || fragment.get('access_token');
         const refreshToken = urlParams.get('refresh_token') || fragment.get('refresh_token');
-        const type = urlParams.get('type') || fragment.get('type');
         
-        console.log('🔍 [CLOUDFLARE] Checking tokens:', { accessToken: !!accessToken, refreshToken: !!refreshToken, type });
+        console.log('🔍 [CLOUDFLARE] Checking tokens:', { 
+            tokenHash: !!tokenHash, 
+            type, 
+            accessToken: !!accessToken, 
+            refreshToken: !!refreshToken,
+            fullUrl: window.location.href
+        });
         
         // Supabase 클라이언트 초기화
         let supabase;
@@ -274,13 +281,29 @@
             messageDiv.innerHTML = '';
             
             try {
-                // URL에서 토큰이 있는 경우 세션 설정
-                if (accessToken && refreshToken) {
-                    console.log('🔑 [CLOUDFLARE] Setting session with tokens');
+                // 🔑 Supabase 비밀번호 재설정 토큰 처리
+                if (tokenHash && type === 'recovery') {
+                    console.log('🔑 [CLOUDFLARE] Verifying OTP for password reset');
+                    
+                    // verifyOtp로 토큰 검증 및 세션 생성
+                    const { data: verifyData, error: verifyError } = await supabase.auth.verifyOtp({
+                        token_hash: tokenHash,
+                        type: 'recovery'
+                    });
+                    
+                    if (verifyError) {
+                        throw new Error(`토큰 검증 실패: ${verifyError.message}`);
+                    }
+                    
+                    console.log('✅ [CLOUDFLARE] Token verified successfully');
+                } else if (accessToken && refreshToken) {
+                    console.log('🔑 [CLOUDFLARE] Setting session with access/refresh tokens');
                     await supabase.auth.setSession({
                         access_token: accessToken,
                         refresh_token: refreshToken
                     });
+                } else {
+                    throw new Error('유효한 토큰이 없습니다.');
                 }
                 
                 // 비밀번호 업데이트
@@ -343,12 +366,29 @@
         window.addEventListener('load', () => {
             console.log('📄 [CLOUDFLARE] Page loaded');
             
-            if (!accessToken && !refreshToken) {
-                console.warn('⚠️ [CLOUDFLARE] No tokens found in URL');
+            // 비밀번호 재설정 토큰 확인 (token_hash + type=recovery 또는 access_token + refresh_token)
+            const hasValidTokens = (tokenHash && type === 'recovery') || (accessToken && refreshToken);
+            
+            if (!hasValidTokens) {
+                console.warn('⚠️ [CLOUDFLARE] No valid tokens found in URL');
+                console.log('🔍 [CLOUDFLARE] URL analysis:', {
+                    tokenHash: !!tokenHash,
+                    type,
+                    accessToken: !!accessToken,
+                    refreshToken: !!refreshToken,
+                    search: window.location.search,
+                    hash: window.location.hash
+                });
+                
                 document.getElementById('message').innerHTML = '<div class="error">유효하지 않은 비밀번호 재설정 링크입니다.<br>새로운 비밀번호 재설정을 요청해주세요.</div>';
                 document.getElementById('resetForm').style.display = 'none';
             } else {
-                console.log('✅ [CLOUDFLARE] Tokens found, ready for password reset');
+                console.log('✅ [CLOUDFLARE] Valid tokens found, ready for password reset');
+                if (tokenHash && type === 'recovery') {
+                    console.log('🔑 [CLOUDFLARE] Using token_hash recovery method');
+                } else if (accessToken && refreshToken) {
+                    console.log('🔑 [CLOUDFLARE] Using access/refresh token method');
+                }
             }
         });
         
